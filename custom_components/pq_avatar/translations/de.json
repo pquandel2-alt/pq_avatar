@@ -1,0 +1,54 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AI Avatar",
+        "description": "Wähle den KI-Anbieter für den Conversation-Agent.",
+        "data": {
+          "provider": "Anbieter"
+        }
+      },
+      "credentials": {
+        "title": "AI Avatar – {provider}",
+        "description": "API-Schlüssel und Modell für {provider} eingeben.",
+        "data": {
+          "api_key": "API-Schlüssel",
+          "base_url": "Basis-URL",
+          "model": "Modell"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Ungültiger API-Schlüssel.",
+      "cannot_connect": "Verbindung zum Anbieter fehlgeschlagen."
+    },
+    "abort": {
+      "already_configured": "Dieser Anbieter ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "AI-Avatar-Einstellungen",
+        "data": {
+          "model": "Modell",
+          "max_tokens": "Max. Tokens",
+          "temperature": "Temperatur",
+          "system_prompt": "System-Prompt",
+          "greeting": "Avatar-Begrüßung",
+          "wake_word": "Wake Word nutzen",
+          "pipeline_id": "Pipeline-ID (optional)"
+        }
+      }
+    }
+  },
+  "selector": {
+    "provider": {
+      "options": {
+        "nvidia": "NVIDIA NIM",
+        "anthropic": "Anthropic (Claude)",
+        "openai": "OpenAI-kompatibel"
+      }
+    }
+  }
+}
