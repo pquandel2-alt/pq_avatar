@@ -1,6 +1,6 @@
 // @ts-check
 // =====================================================================
-//  Avatar Panel Card v1.3.0
+//  Avatar Panel Card v1.4.0
 //  Visuelles AI-Panel für Tablets (Fully Kiosk Browser).
 //  Wake Word → animierter Avatar durchläuft idle/listening/thinking/speaking.
 //
@@ -107,6 +107,10 @@ class AvatarPanelCard extends HTMLElement {
     this._analyser = this._playCtx.createAnalyser();
     this._analyser.fftSize = 1024;
 
+    // Companion/WebView: Kontexte nach der User-Geste aktiv schalten.
+    try { await this._micCtx.resume(); } catch { /* ignore */ }
+    try { await this._playCtx.resume(); } catch { /* ignore */ }
+
     this._startPipeline();
   }
 
@@ -114,8 +118,13 @@ class AvatarPanelCard extends HTMLElement {
     this._micStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
-    // Erzwinge 16 kHz — dann ist kein manuelles Downsampling nötig.
-    this._micCtx = new AudioContext({ sampleRate: 16000 });
+    // 16 kHz anfordern; manche WebViews ignorieren das → echte Rate merken.
+    try {
+      this._micCtx = new AudioContext({ sampleRate: 16000 });
+    } catch {
+      this._micCtx = new AudioContext();
+    }
+    this._micRate = this._micCtx.sampleRate || 16000;
     const src = this._micCtx.createMediaStreamSource(this._micStream);
     // ScriptProcessor: deprecated, aber überall verfügbar & ausreichend.
     const node = this._micCtx.createScriptProcessor(2048, 1, 1);
@@ -132,11 +141,22 @@ class AvatarPanelCard extends HTMLElement {
     const sock = this._hass?.connection?.socket;
     if (!sock || sock.readyState !== 1) return;
 
-    const pcm = new Int16Array(float32.length);
-    for (let i = 0; i < float32.length; i++) {
-      const s = Math.max(-1, Math.min(1, float32[i]));
+    // Auf 16 kHz herunterrechnen, falls der Kontext eine andere Rate liefert.
+    const inRate = this._micRate || 16000;
+    let samples = float32;
+    if (inRate !== 16000) {
+      const ratio = inRate / 16000;
+      const outLen = Math.floor(float32.length / ratio);
+      samples = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i++) samples[i] = float32[Math.floor(i * ratio)];
+    }
+
+    const pcm = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
       pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
+    this._frames = (this._frames || 0) + 1;
     const frame = new Uint8Array(pcm.byteLength + 1);
     frame[0] = id; // erstes Byte = Handler-ID
     frame.set(new Uint8Array(pcm.buffer), 1);
@@ -144,7 +164,7 @@ class AvatarPanelCard extends HTMLElement {
   }
 
   // ----- Assist-Pipeline ---------------------------------------------
-  _startPipeline() {
+  _startPipeline(forceStt = false) {
     if (!this._hass || !this._started) return;
     if (this._unsub) {
       this._unsub();
@@ -152,7 +172,7 @@ class AvatarPanelCard extends HTMLElement {
     }
     this._sttHandlerId = null;
 
-    const wake = this._config.wake_word !== false;
+    const wake = !forceStt && this._config.wake_word !== false;
     /** @type {Record<string, any>} */
     const msg = {
       type: 'assist_pipeline/run',
@@ -165,14 +185,21 @@ class AvatarPanelCard extends HTMLElement {
     if (wake) msg.wake_word_settings = { timeout: 300 };
     if (this._config.continue_conversation && this._convId) msg.conversation_id = this._convId;
 
+    if (wake) this._setHint('Warte auf Wake Word … (oder antippen)');
+    else this._setState('listening');
+
     this._hass.connection
       .subscribeMessage((ev) => this._onPipelineEvent(ev), msg)
       .then((unsub) => {
         this._unsub = unsub;
       })
       .catch((err) => {
+        const m = err?.message || String(err);
         this._log('Pipeline-Start fehlgeschlagen', err);
-        this._scheduleRestart(2000);
+        this._setError(
+          `Pipeline-Start fehlgeschlagen: ${m} — Wake Word / STT / TTS in der Pipeline gesetzt?`
+        );
+        this._scheduleRestart(3000);
       });
   }
 
@@ -181,6 +208,8 @@ class AvatarPanelCard extends HTMLElement {
     switch (ev.type) {
       case 'run-start':
         this._sttHandlerId = ev.data?.runner_data?.stt_binary_handler_id ?? null;
+        this._frames = 0;
+        this._clearError();
         break;
       case 'wake_word-end':
         this._setState('listening');
@@ -212,11 +241,19 @@ class AvatarPanelCard extends HTMLElement {
         // Wenn keine TTS-Wiedergabe lief → direkt neu starten.
         if (this._state !== 'speaking') this._scheduleRestart(200);
         break;
-      case 'error':
+      case 'error': {
+        const code = ev.data?.code || '';
+        const m = ev.data?.message || code || 'Unbekannter Fehler';
         this._log('Pipeline-Fehler', ev.data);
-        this._setTranscript(ev.data?.message || '');
-        this._scheduleRestart(1500);
+        // Wake-Word-Timeout ist normal (kein Wort gehört) → leise neu starten.
+        if (code.includes('wake') && code.includes('timeout')) {
+          this._scheduleRestart(200);
+        } else {
+          this._setError(`Pipeline-Fehler: ${m}`);
+          this._scheduleRestart(2500);
+        }
         break;
+      }
     }
   }
 
@@ -307,6 +344,22 @@ class AvatarPanelCard extends HTMLElement {
   _setTranscript(text) {
     const el = this.shadowRoot.getElementById('transcript');
     if (el) el.textContent = text || '';
+  }
+
+  _setHint(text) {
+    const s = this.shadowRoot.getElementById('status');
+    if (s) s.textContent = text;
+  }
+
+  _setError(text) {
+    const el = this.shadowRoot.getElementById('error');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  _clearError() {
+    this._setError('');
   }
 
   _setOverlay(show, text) {
@@ -420,6 +473,12 @@ class AvatarPanelCard extends HTMLElement {
           max-width:560px; text-align:center; font-size:15px; line-height:1.4;
           color:rgba(255,255,255,0.72); min-height:1.4em; padding:0 12px;
         }
+        #error {
+          display:none; max-width:560px; text-align:center; font-size:13px; line-height:1.4;
+          color:#ff9b9b; background:rgba(120,20,20,0.25);
+          border:1px solid rgba(255,120,120,0.35); border-radius:10px; padding:8px 12px;
+        }
+        .stage { cursor:pointer; }
 
         /* ---- Start-/Fehler-Overlay ---- */
         #overlay {
@@ -477,6 +536,7 @@ class AvatarPanelCard extends HTMLElement {
         </div>
         <div id="status">${STATUS_TEXT.idle}</div>
         <div id="transcript"></div>
+        <div id="error"></div>
 
         <div id="overlay">
           <div class="mic">🎙️</div>
@@ -488,6 +548,17 @@ class AvatarPanelCard extends HTMLElement {
 
     const overlay = this.shadowRoot.getElementById('overlay');
     overlay?.addEventListener('click', () => this._start());
+
+    // Tippen auf den Avatar: starten — oder im Idle sofort zuhören (Tap-to-Talk).
+    const stage = this.shadowRoot.getElementById('stage');
+    stage?.addEventListener('click', () => {
+      if (!this._started) {
+        this._start();
+      } else if (this._state === 'idle') {
+        this._clearError();
+        this._startPipeline(true);
+      }
+    });
 
     this._buildHolo(BUST);
   }

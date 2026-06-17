@@ -24,7 +24,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-_FRONTEND_VERSION = "1.0.0"
+_FRONTEND_VERSION = "1.4.0"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
