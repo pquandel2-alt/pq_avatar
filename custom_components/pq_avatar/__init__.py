@@ -17,6 +17,7 @@ from .const import (
     DEFAULT_GREETING,
     DOMAIN,
     FRONTEND_URL,
+    MODEL_URL,
     PANEL_ICON,
     PANEL_TITLE,
     PANEL_URL_PATH,
@@ -24,7 +25,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-_FRONTEND_VERSION = "1.4.0"
+_FRONTEND_VERSION = "2.0.0"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -52,9 +53,12 @@ async def _async_register_frontend(hass: HomeAssistant, entry: ConfigEntry) -> N
 
     # Statische JS-Datei + globale Ressource nur einmal registrieren.
     if not store.get("frontend_registered"):
-        js_path = Path(__file__).parent / "www" / "avatar-panel.js"
+        www = Path(__file__).parent / "www"
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(FRONTEND_URL, str(js_path), False)]
+            [
+                StaticPathConfig(FRONTEND_URL, str(www / "avatar-panel.js"), False),
+                StaticPathConfig(MODEL_URL, str(www / "facecap.glb"), False),
+            ]
         )
         frontend.add_extra_js_url(hass, f"{FRONTEND_URL}?v={_FRONTEND_VERSION}")
         store["frontend_registered"] = True

@@ -9,6 +9,7 @@ PLATFORMS = [Platform.CONVERSATION]
 
 # Frontend
 FRONTEND_URL = f"/{DOMAIN}/avatar-panel.js"
+MODEL_URL = f"/{DOMAIN}/facecap.glb"
 PANEL_URL_PATH = "ai-avatar"
 PANEL_TITLE = "AI Avatar"
 PANEL_ICON = "mdi:robot-happy"
